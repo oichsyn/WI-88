@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>감정지도</title>
+<style>
+  :root{
+    --axis:rgba(0,0,0,0.22); --label:rgba(0,0,0,0.65);
+    --pointer:#3a6ed8; --pointerIdle:#bbbbbb; --mark:#2f8f5b;
+    --panel:#ffffff; --stroke:rgba(0,0,0,0.10);}
+
+  html,body{height:100%; margin:0; 
+            font-family:"Noto Sans KR", system-ui, -apple-system, sans-serif;
+            background-image: url("moodback.jpg");
+            background-size: cover; background-position: center;background-repeat: no-repeat;}
+  body{display:flex; flex-direction:column;}
+
+  .top-info{position:relative; z-index:1;
+            margin:14px auto 8px; color:#5b4b3f; font-size:14px;
+            width:min(980px, 92vw);}
+
+  .corner-img{position: fixed; bottom: 20px; 
+              left: 20px; width: 280px; height: auto; 
+              pointer-events: none;}
+
+  .main{flex:1; width:100%; display:flex; gap:12px;
+        padding:8px 12px 12px; box-sizing:border-box;}
+  .left{width:280px; min-width:240px; padding:16px;
+        display:flex; flex-direction:column; gap:14px;}
+
+  .home-btn {width: 50px; height: 50px;
+            border-radius: 50%; 
+            background: black;
+            font-size: 20px; font-weight: 800;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;}
+
+  .left h3{margin:0 0 4px 0; font-size:16px;}
+  .left label{font-size:13px; color:#5b4b3f}
+  .left input[type="date"]{width:93%; padding:8px 10px; font-size:14px; border-radius:0px; border:0; background:#fff;}
+  .left .btn{padding:8px 10px; border-radius:0px; border:0; background:#fff; cursor:pointer; font-size:13px}
+  .left .muted{font-size:12px; color:#7a6c60; line-height:1.5}
+
+  .right{position:relative; flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden;}
+
+  canvas#board{display:block; width:100%; height:100%;}
+  video#cam{position:absolute; width:1px; height:1px; left:-9999px; opacity:0; pointer-events:none;}
+
+  .tooltip{
+    position:absolute; padding:6px 8px; font-size:12px;
+    background: rgba(255, 255, 255, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-radius:8px; pointer-events:none; white-space:nowrap;
+    transition:opacity .12s ease; opacity:0;}
+</style>
+</head>
+
+
+
+<body>
+  <div class="top-info">
+    날짜를 지정한 뒤 손바닥을 펴 이동하고, 원하는 위치에서 주먹을 쥐어보세요.
+  </div>
+
+  <section class="main">
+    <aside class="left">
+      <button class="home-btn" onclick="location.href='index.html'">←</button>
+      <h3></h3>
+      <input type="date" id="dateInput" />
+      <button class="btn" id="clearAllBtn">모든 점 지우기</button>
+    </aside>
+
+    <div class="right" id="rightPane">
+      <canvas id="board"></canvas>
+      <video id="cam" playsinline muted></video>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+  </section>
+
+
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+
+
+  <script>
+  (() => {
+    const rightPane = document.getElementById('rightPane');
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('cam');
+    const tooltip = document.getElementById('tooltip');
+    const dateInput = document.getElementById('dateInput');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+
+    const todayStr = () => new Date().toISOString().slice(0,10);
+    dateInput.value = todayStr();
+
+    let W=0, H=0, C={x:0,y:0};
+    function resizeCanvasToPane(){
+      const r = rightPane.getBoundingClientRect();
+      canvas.width  = Math.max(320, Math.floor(r.width));
+      canvas.height = Math.max(240, Math.floor(r.height));
+      W = canvas.width; H = canvas.height;
+      C = {x: W/2, y: H/2};
+    }
+    resizeCanvasToPane();
+    window.addEventListener('resize', resizeCanvasToPane);
+
+    const mirror = true;
+    const pointer = { x: 0, y: 0 };
+    let hasHand = false;
+
+    const LS_KEY = 'moodPoints_pixels_v1';
+    let points = loadPoints();
+    function savePoints(){ localStorage.setItem(LS_KEY, JSON.stringify(points)); }
+    function loadPoints(){ try{ return JSON.parse(localStorage.getItem(LS_KEY)) || []; }catch(e){ return []; } }
+
+    function mapHandToCanvas(nx, ny){
+      const xNorm = mirror ? (1 - nx) : nx; // 0..1
+      return { x: xNorm * W, y: ny * H };
+    }
+
+    const LABELS = { top:'😁', bottom:'😭', right:'🫨', left:'😡' };
+
+    function draw(){
+      ctx.clearRect(0,0,W,H);
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 1)';  // 완전 흰색 (불투명)
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(C.x, 0); ctx.lineTo(C.x, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, C.y); ctx.lineTo(W, C.y); ctx.stroke();
+
+
+      ctx.font = 'bold 48px "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+      ctx.fillStyle = 'rgba(0, 0, 0, 1)'; // 완전 불투명
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+
+      ctx.fillText(LABELS.top, C.x, 48);
+
+      ctx.fillText(LABELS.bottom, C.x, H - 48);
+
+      ctx.textAlign = 'right';
+      ctx.fillText(LABELS.right, W - 40, C.y);
+
+      ctx.textAlign = 'left';
+      ctx.fillText(LABELS.left, 40, C.y);
+
+      for(const rec of points){
+        ctx.beginPath();
+        ctx.fillStyle = rec.color || '#2f8f5b';
+        ctx.arc(rec.x, rec.y, 8, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      const pc = hasHand
+        ? (getComputedStyle(document.documentElement).getPropertyValue('--pointer').trim() || '#3a6ed8')
+        : (getComputedStyle(document.documentElement).getPropertyValue('--pointerIdle').trim() || '#bbb');
+      ctx.beginPath(); ctx.fillStyle = pc;
+      ctx.arc(pointer.x||C.x, pointer.y||C.y, 12, 0, Math.PI*2); ctx.fill();
+
+      requestAnimationFrame(draw);
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const hit = hitTestPoint(mx, my, 12);
+      if(hit){
+        tooltip.style.left = `${e.clientX}px`;
+        tooltip.style.top  = `${e.clientY}px`;
+        tooltip.textContent = `${hit.date} 기록`;
+        tooltip.style.opacity = 1;
+      }else{
+        tooltip.style.opacity = 0;
+      }
+    });
+    canvas.addEventListener('mouseleave', ()=>{ tooltip.style.opacity = 0; });
+
+    function hitTestPoint(mx, my, radius=12){
+      let found=null, minD=1e9;
+      for(const rec of points){
+        const d = Math.hypot(rec.x - mx, rec.y - my);
+        if(d <= radius && d < minD){ minD=d; found = rec; }
+      }
+      return found;
+    }
+
+    const BASE_OPEN = 1.35, BASE_FIST = 0.95, TOGGLE = 180, COMMIT = 300;
+    let state = { openPalm:false, fist:false, lastToggle:0, ema:0 };
+    let lastCommitAt = 0;
+
+    function handleLandmarks(lms){
+      if(!lms || !lms.length){ hasHand=false; return; }
+      hasHand = true;
+      const lm = lms[0];
+
+      const tip = lm[8];
+      const pTip = mapHandToCanvas(tip.x, tip.y);
+      pointer.x = pTip.x; pointer.y = pTip.y;
+
+      const palmIdx = [0,5,9,13,17];
+      let px=0, py=0; for(const i of palmIdx){ px += lm[i].x; py += lm[i].y; }
+      px/=palmIdx.length; py/=palmIdx.length;
+      const pPalm = mapHandToCanvas(px, py);
+
+      const handScale = Math.hypot(lm[17].x - lm[5].x, lm[17].y - lm[5].y) + 1e-6;
+      const tips = [lm[8], lm[12], lm[16], lm[20]];
+      let spread=0; for(const t of tips){ spread += Math.hypot(t.x - px, t.y - py); }
+      spread/=tips.length;
+      const opennessNow = spread / handScale;
+      state.ema = state.ema ? (state.ema*0.6 + opennessNow*0.4) : opennessNow;
+
+      const now = performance.now();
+      if(state.openPalm){
+        if(state.ema < BASE_FIST && now - state.lastToggle > TOGGLE){
+          state.openPalm = false; state.fist = true; state.lastToggle = now;
+
+          if(now - lastCommitAt > COMMIT){
+            // 점 색상 랜덤
+            const colors = ['#FF6B6B','#FFD93D','#6BCB77','#4D96FF','#A66DD4','#FF8C42','#00C2A8'];
+            const randomColor = colors[Math.floor(Math.random() * colors.length)];
+
+            points.push({
+              x: pPalm.x, y: pPalm.y,
+              date: dateInput.value || todayStr(),
+              color: randomColor,
+              t: Date.now()
+            });
+            savePoints();
+            lastCommitAt = now;
+          }
+        }
+      }else{
+        if(state.ema > BASE_OPEN && now - state.lastToggle > TOGGLE){
+          state.fist = false; state.openPalm = true; state.lastToggle = now;
+        }
+      }
+    }
+
+    async function start(){
+      const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+      hands.setOptions({ maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.6 });
+      hands.onResults(res => { res.multiHandLandmarks ? handleLandmarks(res.multiHandLandmarks) : hasHand=false; });
+
+      const cam = new Camera(video, { onFrame: async () => { await hands.send({ image: video }); }, width: 640, height: 480 });
+      await cam.start();
+    }
+
+    clearAllBtn.addEventListener('click', () => {
+      if(confirm('모든 점을 삭제할까요?')){
+        points = []; savePoints();
+      }
+    });
+
+    function loop(){ draw(); requestAnimationFrame(loop); }
+    loop();
+    window.addEventListener('load', start);
+  })();
+  </script>
+
+  <img src="cat.png" class="corner-img" alt="">
+</body>
+</html>

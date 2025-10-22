@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>오늘의 운세 – 표지</title>
+<style>
+  html, body {margin: 0;}
+
+  .cover {position: relative; width: 100%;
+          aspect-ratio: 16/9; overflow: hidden;}
+
+  .cover__wrap {position: relative;
+                width: 100%; height: 100%;}
+
+  .cover__bg {position: absolute; inset: 0;
+              width: 100%; height: 100%;
+              object-fit: cover; object-position: center;
+              user-select: none; -webkit-user-drag: none;}
+
+  .arm {position: absolute;
+        width: 85%; left: 10%; top: 11%;          
+        transform-origin: 50% 100%;
+        cursor: pointer; user-select: none;
+        -webkit-user-drag: none;}
+
+  .speech-bubble {position: absolute;
+                  top: 35%; left: 65%;   
+                  width: 220px; height: auto;
+                  opacity: 1; pointer-events: none;}
+
+  @media (max-aspect-ratio: 16/9) {
+    .cover {
+      height: 100vh;
+      width: auto;
+    }
+  }
+</style>
+</head>
+<body>
+
+<section class="cover" aria-label="표지">
+  <div class="cover__wrap">
+    <img src="title.jpg" alt="표지" class="cover__bg">
+    <img src="armup.png" alt="고양이 팔" class="arm" id="arm">
+    <img src="bubble.png" alt="말풍선" class="speech-bubble">
+  </div>
+</section>
+
+<audio id="armSound" src="catsound.mp3" preload="auto"></audio>
+
+<script>
+  const arm = document.getElementById('arm');
+  const sound = document.getElementById('armSound');
+  const preDown = new Image(); preDown.src = 'armdown.png';
+  const preUp = new Image(); preUp.src = 'armup.png';
+
+  arm.addEventListener('click', () => {
+    sound.currentTime = 0;
+    sound.play();
+
+    arm.src = 'armdown.png';
+
+    setTimeout(() => {
+      arm.src = 'armup.png';
+      arm.style.transform = 'rotate(0deg)';
+    }, 180);
+
+    const go = () => { window.location.href = 'mood.html'; };
+    sound.addEventListener('ended', go, { once: true });
+    setTimeout(go, 900); // fallback
+  });
+</script>
+
+</body>
+</html>
